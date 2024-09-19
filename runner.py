@@ -115,5 +115,5 @@ if __name__ == '__main__':
     r = GameRunner(x_agent=a2, o_agent=a1)
 
     r.run_game(s, time_limit=1.0, silent=False, transcript_name="out")
-    s = game.GameState.empty((5, 5), 5)
+    s = game.GameState.empty((3, 3), 3)
     r.run_game(s, time_limit=1.0, silent=False, transcript_name="out")
