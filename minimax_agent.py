@@ -1,14 +1,16 @@
 """
 minimax_agent.py
-author: Nur Ahmed
+author: Nur Ahmed (optimized version)
 """
 import agent
 import game
 import time
+import random
 
 class MinimaxAgent(agent.Agent):
     def __init__(self, initial_state: game.GameState, piece: str):
         super().__init__(initial_state, piece)
+        self.transposition_table = {}  # Cache for evaluated positions
 
     def introduce(self):
         """
@@ -33,66 +35,68 @@ class MinimaxAgent(agent.Agent):
         :param time_limit: time (in seconds) before you'll be cutoff and forfeit the game
         :return: move (x,y)
         """
-        best_move = (0,0)
-        best_move, _ = self.minimax(state, 3)
+        start_time = time.time()
+        best_move = None
+        depth = 1
 
-        return best_move
+        while time.time() - start_time < time_limit * 0.95:  # Use 95% of the time limit
+            move, _ = self.minimax(state, depth, start_time, time_limit)
+            if move is not None:
+                best_move = move
+            else:
+                break
+            depth += 1
 
-    def minimax(self, state: game.GameState, depth_remaining: int, time_limit: float = None,
-                alpha: float = None, beta: float = None, z_hashing=None) -> ((int, int), float):
+        return best_move if best_move else self.get_random_move(state)
+
+    def minimax(self, state: game.GameState, depth_remaining: int, start_time: float, time_limit: float,
+                alpha: float = float('-inf'), beta: float = float('inf')) -> ((int, int), float):
         """
         Uses minimax to evaluate the given state and choose the best action from this state. Uses the next_player of the
         given state to decide between min and max. Recursively calls itself to reach depth_remaining layers. Optionally
         uses alpha, beta for pruning, and/or z_hashing for zobrist hashing.
         :param state: State to evaluate
         :param depth_remaining: number of layers left to evaluate
-        :param time_limit: argument for your use to make sure you return before the time limit. None means no time limit
+        :param start_time: start time of the search
+        :param time_limit: time limit for the search
         :param alpha: alpha value for pruning
         :param beta: beta value for pruning
-        :param z_hashing: zobrist hashing data
         :return: move (x,y) or None, state evaluation
         """
+        if time.time() - start_time > time_limit * 0.95:
+            return None, self.static_eval(state)
+
         if depth_remaining == 0 or state.winner() is not None:
             return None, self.static_eval(state)
 
+        state_hash = self.hash_state(state)
+        if state_hash in self.transposition_table and self.transposition_table[state_hash][0] >= depth_remaining:
+            return self.transposition_table[state_hash][1], self.transposition_table[state_hash][2]
+
         is_maximizing = state.next_player == self.piece
         best_move = None
+        best_score = float('-inf') if is_maximizing else float('inf')
 
-        if alpha is None:
-            alpha = float('-inf')
-        if beta is None:
-            beta = float('inf')
+        for move in self.get_ordered_moves(state):
+            new_state = state.make_move(move)
+            _, score = self.minimax(new_state, depth_remaining - 1, start_time, time_limit, alpha, beta)
+            
+            if is_maximizing:
+                if score > best_score:
+                    best_score = score
+                    best_move = move
+                alpha = max(alpha, best_score)
+            else:
+                if score < best_score:
+                    best_score = score
+                    best_move = move
+                beta = min(beta, best_score)
+            
+            if beta <= alpha:
+                break
 
-        if is_maximizing:
-            best_score = float('-inf')
-            for row in range(state.w):
-                for col in range(state.h):
-                    if state.is_valid_move((row, col)):
-                        new_state = state.make_move((row, col))
-                        _, score = self.minimax(new_state, depth_remaining - 1, time_limit, alpha, beta)
-                        
-                        if score > best_score:
-                            best_score = score
-                            best_move = (row, col)
-                        alpha = max(alpha, score)
-                        if beta <= alpha:
-                            break
-            return best_move, best_score
-        else:
-            best_score = float('inf')
-            for row in range(state.w):
-                for col in range(state.h):
-                    if state.is_valid_move((row, col)):
-                        new_state = state.make_move((row, col))
-                        _, score = self.minimax(new_state, depth_remaining - 1, time_limit, alpha, beta)
-                        
-                        if score < best_score:
-                            best_score = score
-                            best_move = (row, col)
-                        beta = min(beta, score)
-                        if beta <= alpha:
-                            break
-            return best_move, best_score
+        self.transposition_table[state_hash] = (depth_remaining, best_move, best_score)
+        return best_move, best_score
 
     def static_eval(self, state: game.GameState) -> float:
         """
@@ -101,52 +105,61 @@ class MinimaxAgent(agent.Agent):
         :return: evaluation of the state
         """
         score = 0
-        lines = []
-
-        # Rows and Columns
-        for i in range(state.w):
-            lines.append(state.board[i])  # Row
-            lines.append([state.board[j][i] for j in range(state.h)])  # Column
-
-        # Diagonals - Left-to-Right and Right-to-Left
-        for d in range(1 - state.w, state.h):
-            # Left-to-Right Diagonals
-            lr_diag = [state.board[i][d + i] for i in range(max(0, -d), min(state.w, state.h - d)) if 0 <= d + i < state.h]
-            if lr_diag:
-                lines.append(lr_diag)
-
-            # Right-to-Left Diagonals
-            rl_diag = [state.board[i][state.h - 1 - d - i] for i in range(max(0, -d), min(state.w, state.h - d)) if 0 <= state.h - 1 - d - i < state.h]
-            if rl_diag:
-                lines.append(rl_diag)
-
-        # Evaluate each line
-        for line in lines:
-            score += self.evaluate_line(line, self.piece, state.k)
-
+        for row in state.board:
+            score += self.evaluate_line(row, self.piece, state.k)
+        for col in zip(*state.board):
+            score += self.evaluate_line(col, self.piece, state.k)
         return score
 
     def evaluate_line(self, line: list[str], agent_piece: str, k: int) -> float:
+        """
+        Evaluates a single line (row, column, or diagonal) for potential wins
+        :param line: list of pieces in the line
+        :param agent_piece: the piece of the current agent
+        :param k: number of pieces in a row needed to win
+        :return: score for the line
+        """
         score = 0
-        opponent_piece = ''
-        # Determines opponent piece by referencing agent piece
-        if agent_piece == game.X_PIECE:
-            opponent_piece = game.O_PIECE
-        else:
-            opponent_piece = game.X_PIECE
-            
-        # Check for potential sequences of length k
+        opponent_piece = game.O_PIECE if agent_piece == game.X_PIECE else game.X_PIECE
+        
         for i in range(len(line) - k + 1):
             segment = line[i:i+k]
             if game.BLOCK_PIECE not in segment:
                 agent_count = segment.count(agent_piece)
                 opponent_count = segment.count(opponent_piece)
                 
-                if opponent_count == 0 and agent_count > 0:
-                    # Score positively based on the number of agent's pieces in the segment
-                    score += agent_count ** 2  # Exponential scoring based on number of pieces
-                elif agent_count == 0 and opponent_count > 0:
-                    # Score negatively based on the number of opponent's pieces in the segment
-                    score -= opponent_count ** 2
+                if opponent_count == 0:
+                    score += 10 ** agent_count
+                elif agent_count == 0:
+                    score -= 10 ** opponent_count
 
         return score
+
+    def get_ordered_moves(self, state: game.GameState) -> list[(int, int)]:
+        """
+        Returns a list of possible moves, potentially ordered for better pruning
+        :param state: current game state
+        :return: list of possible moves as (x, y) tuples
+        """
+        moves = [(x, y) for x in range(state.w) for y in range(state.h) if state.is_valid_move((x, y))]
+        # Simple move ordering: prefer center moves
+        center_x, center_y = state.w // 2, state.h // 2
+        moves.sort(key=lambda move: abs(move[0] - center_x) + abs(move[1] - center_y))
+        return moves
+
+    def get_random_move(self, state: game.GameState) -> (int, int):
+        """
+        Selects a random valid move from the game state
+        :param state: current game state
+        :return: a random valid move as (x, y) tuple
+        """
+        valid_moves = [(x, y) for x in range(state.w) for y in range(state.h) if state.is_valid_move((x, y))]
+        return random.choice(valid_moves) if valid_moves else (0, 0)
+
+    def hash_state(self, state: game.GameState) -> int:
+        """
+        Creates a hash of the current game state for the transposition table
+        :param state: current game state
+        :return: hash value of the state
+        """
+        return hash(tuple(tuple(row) for row in state.board) + (state.next_player,))
